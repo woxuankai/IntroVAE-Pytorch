@@ -2,15 +2,36 @@ import  torch
 from    torch import nn, optim
 from    torch.nn import functional as F
 import  math
-from    utils import Reshape, Flatten, ResBlk
+from    utils import ResBlk
 
+class ResBlk(nn.Module):
+    def __init__(self, kernels, chs):
+        """
+        :param kernels: [1, 3, 3], as [kernel_1, kernel_2, kernel_3]
+        :param chs: [ch_in, 64, 64, 64], as [ch_in, ch_out1, ch_out2, ch_out3]
+        :return:
+        """
+        assert len(chs)-1 == len(kernels), "mismatching between chs and kernels"
+        assert all(map(lambda x: x%2==1, kernels)), "odd kernel size only"
+        super(ResBlk, self).__init__()
+        layers = []
+        for idx in range(len(kernels)):
+            layers += [nn.Conv2d(chs[idx], chs[idx+1], kernels[idx], \
+                        padding = kernels[idx]//2), \
+                        nn.LeakyReLU(0.2, True)]
+        layers.pop() # remove last activation
+        self.net = nn.Sequential(*layers)
+        self.shortcut = nn.Sequential()
+        if chs[0] != chs[-1]: # convert from ch_int to ch_out3
+            self.shortcut = nn.Conv2d(chs[0], chs[-1], kernel_size=1)
+
+    def forward(self, x):
+        return self.shortcut(x) + self.net(x)
 
 
 class Encoder(nn.Module):
-
     def __init__(self, imgsz, ch):
         """
-
         :param imgsz:
         :param ch: base channels
         """
@@ -18,17 +39,14 @@ class Encoder(nn.Module):
 
         x = torch.randn(2, 3, imgsz, imgsz)
         print('Encoder:', list(x.shape), end='=>')
-
         layers = [
             nn.Conv2d(3, ch, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm2d(ch),
-            nn.ReLU(inplace=True),
+            nn.LeaklyReLU(0.2, inplace=True),
             nn.AvgPool2d(2, stride=None, padding=0),
         ]
         # just for print
         out = nn.Sequential(*layers)(x)
         print(list(out.shape), end='=>')
-
         # [b, ch_cur, imgsz, imgsz] => [b, ch_next, mapsz, mapsz]
         mapsz = imgsz // 2
         ch_cur = ch
@@ -36,83 +54,64 @@ class Encoder(nn.Module):
 
         while mapsz > 4: # util [b, ch_, 4, 4]
             # add resblk
-            layers.extend([
-                ResBlk([1, 3, 3], [ch_cur, ch_next, ch_next, ch_next]),
-                nn.AvgPool2d(kernel_size=2, stride=None)
-            ])
+            layers += [ResBlk([1, 3, 3], [ch_cur]+[ch_next]*3), \
+                    nn.AvgPool2d(kernel_size=2, stride=None)]
             mapsz = mapsz // 2
             ch_cur = ch_next
             ch_next = ch_next * 2 if ch_next < 512 else 512 # set max ch=512
-
             # for print
             out = nn.Sequential(*layers)(x)
             print(list(out.shape), end='=>')
 
-        layers.extend([
-            ResBlk([3, 3], [ch_cur, ch_next, ch_next]),
-            nn.AvgPool2d(kernel_size=2, stride=None),
-            ResBlk([3, 3], [ch_next, ch_next, ch_next]),
-            nn.AvgPool2d(kernel_size=2, stride=None),
-            Flatten()
-        ])
-
+        layers += [ResBlk([3, 3], [ch_cur, ch_next, ch_next]), \
+                nn.AvgPool2d(kernel_size=2, stride=None), \
+                ResBlk([3, 3], [ch_next, ch_next, ch_next]), \
+                nn.AvgPool2d(kernel_size=2, stride=None)]
         self.net = nn.Sequential(*layers)
 
         # for printing
         out = nn.Sequential(*layers)(x)
+        out = out.view(out.shape[0], -1)
         print(list(out.shape))
-
 
     def forward(self, x):
         """
-
         :param x:
         :return:
         """
-        return self.net(x)
-
-
+        x = self.net(x)
+        x = x.view(x.shape[0], -1)
 
 
 class Decoder(nn.Module):
-
-
     def __init__(self, imgsz, z_dim):
         """
-
         :param imgsz:
         :param z_dim:
         """
         super(Decoder, self).__init__()
-
         mapsz = 4
         ch_next = z_dim
         print('Decoder:', [z_dim], '=>', [2, ch_next, mapsz, mapsz], end='=>')
 
-        # z: [b, z_dim] => [b, z_dim, 4, 4]
-        layers = [
-            # z_dim => z_dim * 4 * 4 => [z_dim, 4, 4] => [z_dim, 4, 4]
-            nn.Linear(z_dim, z_dim * mapsz * mapsz),
-            nn.BatchNorm1d(z_dim * mapsz * mapsz),
-            nn.ReLU(inplace=True),
-            Reshape(z_dim, mapsz, mapsz),
-            ResBlk([3, 3], [z_dim, z_dim, z_dim])
-        ]
+        self.fc = nn.Sequential( \
+                nn.Linear(z_dim, z_dim * mapsz * mapsz), \
+                nn.ReLU(inplace=True))
 
+        # z_dim => z_dim * 4 * 4 => [z_dim, 4, 4] => [z_dim, 4, 4]
+        layers = [ResBlk([3, 3], [z_dim, z_dim, z_dim])]
 
         # scale imgsz up while keeping channel untouched
         # [b, z_dim, 4, 4] => [b, z_dim, 8, 8] => [b, z_dim, 16, 16]
         for i in range(2):
-            layers.extend([
-                nn.Upsample(scale_factor=2),
-                ResBlk([3, 3], [ch_next, ch_next, ch_next])
-            ])
+            layers + [nn.Upsample(scale_factor=2), \
+                    ResBlk([3, 3], [ch_next, ch_next, ch_next])]
             mapsz = mapsz * 2
 
             # for print
-            tmp = torch.randn(2, z_dim)
+            tmp = self.fc(torch.randn(2, z_dim))
             net = nn.Sequential(*layers)
-            out = net(tmp)
+            out = net(tmp.view(tmp.shape[0],-1,4,4))
             print(list(out.shape), end='=>')
             del net
 
@@ -122,58 +121,44 @@ class Decoder(nn.Module):
         while mapsz < imgsz//2:
             ch_cur = ch_next
             ch_next = ch_next // 2 if ch_next >=32 else ch_next # set mininum ch=16
-            layers.extend([
-                # [2, 32, 32, 32] => [2, 32, 64, 64]
-                nn.Upsample(scale_factor=2),
-                # => [2, 16, 64, 64]
-                ResBlk([1, 3, 3], [ch_cur, ch_next, ch_next, ch_next])
-            ])
+            # [2, 32, 32, 32] => [2, 32, 64, 64] => [2, 16, 64, 64]
+            layers += [nn.Upsample(scale_factor=2), \
+                    ResBlk([1, 3, 3], [ch_cur, ch_next, ch_next, ch_next])]
             mapsz = mapsz * 2
 
             # for print
             tmp = torch.randn(2, z_dim)
+            tmp = self.fc(torch.randn(2, z_dim))
             net = nn.Sequential(*layers)
-            out = net(tmp)
+            out = net(tmp.view(tmp.shape[0],-1,4,4))
             print(list(out.shape), end='=>')
             del net
 
-
         # [b, ch_next, 512, 512] => [b, 3, 1024, 1024]
-        layers.extend([
-            nn.Upsample(scale_factor=2),
-            ResBlk([3, 3], [ch_next, ch_next, ch_next]),
-            nn.Conv2d(ch_next, 3, kernel_size=5, stride=1, padding=2),
-            # sigmoid / tanh
-        ])
-
+        layers += [nn.Upsample(scale_factor=2), \
+                ResBlk([3, 3], [ch_next, ch_next, ch_next]), \
+                nn.Conv2d(ch_next, 3, kernel_size=5, stride=1, padding=2)]
         self.net = nn.Sequential(*layers)
 
         # for print
         tmp = torch.randn(2, z_dim)
-        out = self.net(tmp)
+        tmp = self.fc(torch.randn(2, z_dim))
+        out = net(tmp.view(tmp.shape[0],-1,4,4))
         print(list(out.shape))
 
     def forward(self, x):
         """
-
         :param x: [b, z_dim]
         :return:
         """
-        # print('before forward:', x.shape)
-        x =  self.net(x)
-        # print('after forward:', x.shape)
+        x = self.fc(x)
+        x = self.net(x.view(x.shape[0],-1,4,4))
         return x
 
 
-
-
-
 class IntroVAE(nn.Module):
-
-
     def __init__(self, args):
         """
-
         :param imgsz:
         :param z_dim: h_dim is the output dim of encoder, and we use z_net net to convert it from
         h_dim to 2*z_dim and then splitting.
@@ -182,7 +167,6 @@ class IntroVAE(nn.Module):
 
         imgsz = args.imgsz
         z_dim = args.z_dim
-
 
         # set first conv channel as 16
         self.encoder = Encoder(imgsz, 16)
@@ -328,34 +312,8 @@ class IntroVAE(nn.Module):
         decoder_loss.backward()
         self.optim_decoder.step()
 
-
-
         return encoder_loss, decoder_loss, reg_ae, encoder_adv, decoder_adv, loss_ae, xr, xp, \
                regr, regr_ng, regpp, regpp_ng
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def main():
-    pass
-
-
-
-
-
-if __name__ == '__main__':
-    main()
