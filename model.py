@@ -2,7 +2,6 @@ import  torch
 from    torch import nn, optim
 from    torch.nn import functional as F
 import  math
-from    utils import ResBlk
 
 class ResBlk(nn.Module):
     def __init__(self, kernels, chs):
@@ -41,7 +40,7 @@ class Encoder(nn.Module):
         print('Encoder:', list(x.shape), end='=>')
         layers = [
             nn.Conv2d(3, ch, kernel_size=5, stride=1, padding=2),
-            nn.LeaklyReLU(0.2, inplace=True),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.AvgPool2d(2, stride=None, padding=0),
         ]
         # just for print
@@ -80,7 +79,7 @@ class Encoder(nn.Module):
         :return:
         """
         x = self.net(x)
-        x = x.view(x.shape[0], -1)
+        return x.view(x.shape[0], -1)
 
 
 class Decoder(nn.Module):
@@ -104,7 +103,7 @@ class Decoder(nn.Module):
         # scale imgsz up while keeping channel untouched
         # [b, z_dim, 4, 4] => [b, z_dim, 8, 8] => [b, z_dim, 16, 16]
         for i in range(2):
-            layers + [nn.Upsample(scale_factor=2), \
+            layers += [nn.Upsample(scale_factor=2), \
                     ResBlk([3, 3], [ch_next, ch_next, ch_next])]
             mapsz = mapsz * 2
 
@@ -143,7 +142,7 @@ class Decoder(nn.Module):
         # for print
         tmp = torch.randn(2, z_dim)
         tmp = self.fc(torch.randn(2, z_dim))
-        out = net(tmp.view(tmp.shape[0],-1,4,4))
+        out = self.net(tmp.view(tmp.shape[0],-1,4,4))
         print(list(out.shape))
 
     def forward(self, x):
