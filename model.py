@@ -23,9 +23,10 @@ class ResBlk(nn.Module):
         self.shortcut = nn.Sequential()
         if chs[0] != chs[-1]: # convert from ch_int to ch_out3
             self.shortcut = nn.Conv2d(chs[0], chs[-1], kernel_size=1)
+        self.outAct = nn.LeakyReLU(0.2, True)
 
     def forward(self, x):
-        return self.shortcut(x) + self.net(x)
+        return self.outAct(self.shortcut(x) + self.net(x))
 
 
 class Encoder(nn.Module):
