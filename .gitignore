@@ -2,4 +2,5 @@ res
 ckpt
 .idea
 __pycache__
-
+*~
+.*~
