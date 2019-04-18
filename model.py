@@ -28,131 +28,146 @@ class ResBlk(nn.Module):
     def forward(self, x):
         return self.outAct(self.shortcut(x) + self.net(x))
 
-
 class Encoder(nn.Module):
-    def __init__(self, imgsz, ch):
+    def __init__(self, imgsz, ch, z_dim):
         """
         :param imgsz:
         :param ch: base channels
+        :param z_dim: latent space dim
         """
         super(Encoder, self).__init__()
+        self.layers = nn.ModuleList()
 
-        x = torch.randn(2, 3, imgsz, imgsz)
-        print('Encoder:', list(x.shape), end='=>')
-        layers = [
-            nn.Conv2d(3, ch, kernel_size=5, stride=1, padding=2),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.AvgPool2d(2, stride=None, padding=0),
-        ]
-        # just for print
-        out = nn.Sequential(*layers)(x)
-        print(list(out.shape), end='=>')
+        self.layers.append(nn.Sequential( \
+                nn.Conv2d(3, ch, kernel_size=5, stride=1, padding=2),
+                nn.LeakyReLU(0.2, True), 
+                nn.AvgPool2d(2, stride=None, padding=0)))
+
         # [b, ch_cur, imgsz, imgsz] => [b, ch_next, mapsz, mapsz]
         mapsz = imgsz // 2
         ch_cur = ch
         ch_next = ch_cur * 2
-
-        while mapsz > 4: # util [b, ch_, 4, 4]
+        while mapsz > 8: # util [b, ch_, 8, 8]
             # add resblk
-            layers += [ResBlk([1, 3, 3], [ch_cur]+[ch_next]*3), \
-                    nn.AvgPool2d(kernel_size=2, stride=None)]
+            self.layers.append(nn.Sequential( \
+                    ResBlk([1, 3, 3], [ch_cur]+[ch_next]*3), \
+                    nn.AvgPool2d(kernel_size=2, stride=None)))
             mapsz = mapsz // 2
             ch_cur = ch_next
             ch_next = ch_next * 2 if ch_next < 512 else 512 # set max ch=512
-            # for print
-            out = nn.Sequential(*layers)(x)
-            print(list(out.shape), end='=>')
 
-        layers += [ResBlk([3, 3], [ch_cur, ch_next, ch_next]), \
-                nn.AvgPool2d(kernel_size=2, stride=None), \
-                ResBlk([3, 3], [ch_next, ch_next, ch_next]), \
-                nn.AvgPool2d(kernel_size=2, stride=None)]
-        self.net = nn.Sequential(*layers)
+        # 8*8 -> 4*4
+        self.layers.append(nn.Sequential( \
+                ResBlk([3, 3], [ch_cur, ch_next, ch_next]), \
+                nn.AvgPool2d(kernel_size=2, stride=None)))
+        mapsz = mapsz // 2
 
-        # for printing
-        out = nn.Sequential(*layers)(x)
-        out = out.view(out.shape[0], -1)
-        print(list(out.shape))
+        # 4*4 -> 4*4
+        self.layers.append(nn.Sequential( \
+                ResBlk([3, 3], [ch_next, ch_next, ch_next])))
+
+        # convert h_dim to 2*z_dim
+        self.z_net = nn.Linear(ch_next*mapsz*mapsz, 2*z_dim)
+
+        # just for print
+        x = torch.randn(2, 3, imgsz, imgsz)
+        print('Encoder:', list(x.shape), end='=>')
+        with torch.no_grad():
+            for layer in self.layers[:-1]:
+                x = layer(x)
+                print(list(x.shape), end='=>')
+            x = self.layers[-1](x)
+            x = x.view(x.shape[0], -1)
+            print(list(x.shape), end='=>')
+            x = self.z_net(x)
+            print(list(x.shape), end='=>')
+            x = x.chunk(2, dim=1)
+            print(list(x[0].shape), list(x[1].shape))
+        print(self.layers)
+        print(self.z_net)
 
     def forward(self, x):
         """
         :param x:
         :return:
         """
-        x = self.net(x)
-        return x.view(x.shape[0], -1)
-
+        for layer in self.layers:
+            x = layer(x)
+        x = x.view(x.shape[0], -1)
+        mu, logvar = self.z_net(x).chunk(2, dim=1)
+        return mu, logvar
 
 class Decoder(nn.Module):
-    def __init__(self, imgsz, z_dim):
+    def __init__(self, imgsz, ch, z_dim):
         """
         :param imgsz:
-        :param z_dim:
+        :param ch: base channels
+        :param z_dim: latent space dim
         """
         super(Decoder, self).__init__()
-        mapsz = 4
-        ch_next = z_dim
-        print('Decoder:', [z_dim], '=>', [2, ch_next, mapsz, mapsz], end='=>')
+        self.layers = nn.ModuleList()
 
-        self.fc = nn.Sequential( \
-                nn.Linear(z_dim, z_dim * mapsz * mapsz), \
-                nn.ReLU(inplace=True))
+        self.layers.insert(0, nn.Sequential( \
+                nn.Conv2d(ch, 3, kernel_size=5, stride=1, padding=2),
+                nn.LeakyReLU(0.2, True)))
 
-        # z_dim => z_dim * 4 * 4 => [z_dim, 4, 4] => [z_dim, 4, 4]
-        layers = [ResBlk([3, 3], [z_dim, z_dim, z_dim])]
+        self.layers.insert(0, nn.Sequential( \
+                nn.Upsample(scale_factor=2, mode='nearest'),
+                ResBlk([3, 3], [ch, ch, ch])))
 
-        # scale imgsz up while keeping channel untouched
-        # [b, z_dim, 4, 4] => [b, z_dim, 8, 8] => [b, z_dim, 16, 16]
-        for i in range(2):
-            layers += [nn.Upsample(scale_factor=2), \
-                    ResBlk([3, 3], [ch_next, ch_next, ch_next])]
-            mapsz = mapsz * 2
-
-            # for print
-            tmp = self.fc(torch.randn(2, z_dim))
-            net = nn.Sequential(*layers)
-            out = net(tmp.view(tmp.shape[0],-1,4,4))
-            print(list(out.shape), end='=>')
-            del net
-
-        # scale imgsz up and scale imgc down
-        # [b, z_dim, 16, 16] => [z_dim//2, 32, 32] => [z_dim//4, 64, 64] => [z_dim//8, 128, 128]
-        # => [z_dim//16, 256, 256] => [z_dim//32, 512, 512]
-        while mapsz < imgsz//2:
+        mapsz = imgsz // 2
+        ch_cur = ch
+        ch_next = ch_cur * 2
+        while mapsz > 16: # util [b, ch_, 16, 16]
+            self.layers.insert(0, nn.Sequential( \
+                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    ResBlk([1, 3, 3], [ch_next]+[ch_cur]*3)))
+            mapsz = mapsz // 2
             ch_cur = ch_next
-            ch_next = ch_next // 2 if ch_next >=32 else ch_next # set mininum ch=16
-            # [2, 32, 32, 32] => [2, 32, 64, 64] => [2, 16, 64, 64]
-            layers += [nn.Upsample(scale_factor=2), \
-                    ResBlk([1, 3, 3], [ch_cur, ch_next, ch_next, ch_next])]
-            mapsz = mapsz * 2
+            ch_next = ch_next * 2 if ch_next < 512 else 512 # set max ch=512
 
-            # for print
-            tmp = torch.randn(2, z_dim)
-            tmp = self.fc(torch.randn(2, z_dim))
-            net = nn.Sequential(*layers)
-            out = net(tmp.view(tmp.shape[0],-1,4,4))
-            print(list(out.shape), end='=>')
-            del net
+        # 16*16, 8*8
+        for _ in range(2):
+            self.layers.insert(0, nn.Sequential( \
+                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    ResBlk([3, 3], [ch_next]+[ch_cur]*2)))
+            mapsz = mapsz // 2
+            ch_cur = ch_next
+            ch_next = ch_next * 2 if ch_next < 512 else 512 # set max ch=512
 
-        # [b, ch_next, 512, 512] => [b, 3, 1024, 1024]
-        layers += [nn.Upsample(scale_factor=2), \
-                ResBlk([3, 3], [ch_next, ch_next, ch_next]), \
-                nn.Conv2d(ch_next, 3, kernel_size=5, stride=1, padding=2)]
-        self.net = nn.Sequential(*layers)
+        # 4*4
+        self.layers.insert(0, nn.Sequential( \
+                ResBlk([3, 3], [ch_next]+[ch_cur]*2)))
 
-        # for print
-        tmp = torch.randn(2, z_dim)
-        tmp = self.fc(torch.randn(2, z_dim))
-        out = self.net(tmp.view(tmp.shape[0],-1,4,4))
-        print(list(out.shape))
+        # fc
+        self.z_net = nn.Sequential( \
+                nn.Linear(z_dim, ch_next*mapsz*mapsz),
+                nn.ReLU(True))
+
+        # just for print
+        x = torch.randn(2, z_dim)
+        print('Decoder:', list(x.shape), end='=>')
+        x = self.z_net(x)
+        print(list(x.shape), end='=>')
+        with torch.no_grad():
+            x = x.view(x.shape[0], -1, 4, 4)
+            x = self.layers[0](x)
+            for layer in self.layers[1:]:
+                print(list(x.shape), end='=>')
+                x = layer(x)
+            print(list(x.shape))
+        print(self.z_net)
+        print(self.layers)
 
     def forward(self, x):
         """
-        :param x: [b, z_dim]
+        :param x:
         :return:
         """
-        x = self.fc(x)
-        x = self.net(x.view(x.shape[0],-1,4,4))
+        x = torch.randn(2, z_dim)
+        x = x.view(x.shape[0], -1, 4, 4)
+        for layer in self.layers:
+            x = layer(x)
         return x
 
 
@@ -176,11 +191,9 @@ class IntroVAE(nn.Module):
         z_ = self.encoder(x)
         h_dim = z_.size(1)
 
-        # convert h_dim to 2*z_dim
-        self.z_net = nn.Linear(h_dim, 2 * z_dim)
 
         # sample
-        z, mu, log_sigma2 = self.reparametrization(z_)
+        z, mu, log_sigma2 = self.reparameterization(z_)
 
         # create decoder by z_dim
         self.decoder = Decoder(imgsz, z_dim)
@@ -213,23 +226,15 @@ class IntroVAE(nn.Module):
         self.beta = beta
         self.gamma = gamma
 
-    def reparametrization(self, z_):
-        """
-
-        :param z_: [b, 2*z_dim]
-        :return:
-        """
-        # [b, 2*z_dim] => [b, z_dim], [b, z_dim]
-        mu, log_sigma2 = self.z_net(z_).chunk(2, dim=1)
+    def reparam(self, mu, logvar):
         # sample from normal dist
-        eps = torch.randn_like(log_sigma2)
-        # reparametrization trick
-        # mean + sigma * eps
-        z = mu + torch.exp(log_sigma2).sqrt() * eps
+        eps = torch.randn_like(mu)
+        # reparameterization trick
+        std = torch.exp(0.5*logvar)
+        z = mu + std * eps
+        return z
 
-        return z, mu, log_sigma2
-
-    def kld(self, mu, log_sigma2):
+    def kld(self, mu, logvar):
         """
         compute the kl divergence between N(mu, sigma^2) and N(0, 1)
         :param mu: [b, z_dim]
@@ -237,19 +242,16 @@ class IntroVAE(nn.Module):
         :return:
         """
         batchsz = mu.size(0)
-        # https://stats.stackexchange.com/questions/7440/kl-divergence-between-two-univariate-gaussians
-        kl = - 0.5 * (1 + log_sigma2 - torch.pow(mu, 2) - torch.exp(log_sigma2))
-        kl = kl.sum() #(batchsz * self.z_dim)
+        kl = - 0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum()
 
         return kl
 
-    def output_activation(self, x):
-        """
-
-        :param x:
-        :return:
-        """
-        return torch.tanh(x)
+    #def output_activation(self, x):
+    #    """
+    #    :param x:
+    #    :return:
+    #    """
+    #    return torch.tanh(x)
 
     def forward(self, x):
         """
@@ -260,60 +262,48 @@ class IntroVAE(nn.Module):
         """
         batchsz = x.size(0)
 
-        # 1. update encoder
-        z_ = self.encoder(x)
-        z, mu, log_sigma2 = self.reparametrization(z_)
-        xr = self.output_activation(self.decoder(z))
+        # algorithm 1 in arxiv paper
+        # 4. Z <- Enc(X)
+        mu, logvar = self.encoder(x)
+        z = self.reparam(mu, logvar)
+        # 5. Z_p <- N(0,1)
         zp = torch.randn_like(z)
-        xp = self.output_activation(self.decoder(zp))
-
-        loss_ae = F.mse_loss(xr, x, reduction='sum').sqrt()
-        reg_ae = self.kld(mu, log_sigma2)
-
-        zr_ng_ = self.encoder(xr.detach())
-        zr_ng, mur_ng, log_sigma2r_ng =  self.reparametrization(zr_ng_)
-        regr_ng = self.kld(mur_ng, log_sigma2r_ng)
-        # max(0, margin - l)
-        regr_ng = torch.clamp(self.margin - regr_ng, min=0)
-        zpp_ng_ = self.encoder(xp.detach())
-        zpp_ng, mupp_ng, log_sigma2pp_ng = self.reparametrization(zpp_ng_)
-        regpp_ng = self.kld(mupp_ng, log_sigma2pp_ng)
-        # max(0, margin - l)
-        regpp_ng = torch.clamp(self.margin - regpp_ng, min=0)
-
-
-        encoder_adv = regr_ng + regpp_ng
-        encoder_loss = self.gamma * reg_ae + self.alpha * encoder_adv + self.beta * loss_ae
+        # 6. X_r <- Dec(Z), X_p <- Dec(Z_p)
+        xr = self.decoder(z)
+        xp = self.decoder(zp)
+        # 7. L_AE <- L_AE(X_r, X)
+        ae = F.mse_loss(xr, x, reduction='sum')
+        # 8. Z_r <- Enc(ng(X_r)), Z_pp <- Enc(ng(X_p))
+        mur, logvarr = self.encoder(xr.detach())
+        mupp, logvarpp = self.encoder(xp.detach())
+        # 9. L^E_adv <- L_REG(Z) + 
+        #  \alpha{[m - L_REG(Z_r)]^+ + [m - L_REG(Z_pp)]^+}
+        reg = self.kld(mu, logvar)
+        regr = self.kld(mur, logvarr)
+        regpp = self.kld(mupp, logvarpp)
+        Eadv = reg + \
+                self.alpha*F.relu(self.margin - regr) +
+                F.relu(self.margin - regpp)
+        # 10. update \phi_E with L^E_adv + \betaL_AE
         self.optim_encoder.zero_grad()
-        encoder_loss.backward()
+        (Eadv + self.beta*ae).backward()
         self.optim_encoder.step()
-
-
-        # 2. update decoder
-        z_ = self.encoder(x)
-        z, mu, log_sigma2 = self.reparametrization(z_)
-        xr = self.output_activation(self.decoder(z))
-        zp = torch.randn_like(z)
-        xp = self.output_activation(self.decoder(zp))
-
-        loss_ae = F.mse_loss(xr, x, reduction='sum').sqrt()
-
-        zr_ = self.encoder(xr)
-        zr, mur, log_sigma2r = self.reparametrization(zr_)
-        regr = self.kld(mur, log_sigma2r)
-        zpp_ = self.encoder(xp)
-        zpp, mupp, log_sigma2pp = self.reparametrization(zpp_)
-        regpp = self.kld(mupp, log_sigma2pp)
-
-        # by Eq.12, the 1st term of loss
-        decoder_adv = regr + regpp
-        decoder_loss = self.alpha * decoder_adv + self.beta * loss_ae
+        # 11. Z_r <- Enc(X_r), Z_pp <- Enc(X_p)
+        mur, logvarr = self.encoder(xr)
+        mupp, logvarpp = self.encoder(xp)
+        # 12. L^G_adv <- \aplha{L_REG(Z_r)+L_REG(Z_pp)}
+        regr = self.kld(mur, logvarr)
+        regpp = self.kld(mupp, logvarpp)
+        Gadv = self.alpha*regr + regpp
+        # 13 update \theta_G with L^G_adv + \betaL_AE
         self.optim_decoder.zero_grad()
-        decoder_loss.backward()
+        (Gadv + self.beta*ae).backward()
         self.optim_decoder.step()
 
         return encoder_loss, decoder_loss, reg_ae, encoder_adv, decoder_adv, loss_ae, xr, xp, \
                regr, regr_ng, regpp, regpp_ng
 
 
-
+if __name__ == '__main__':
+    Encoder(128,16,256)
+    Decoder(128,16,256)

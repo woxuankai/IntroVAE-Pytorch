@@ -4,7 +4,7 @@ import numpy as np
 from   torch.utils.data import DataLoader
 import argparse
 from   torchvision.utils import save_image
-from   celeba import load_celeba, unnorm_
+from   torchvision import datasets, transforms
 from   model import IntroVAE
 import visdom
 import tqdm
@@ -16,9 +16,12 @@ def main(args):
     torch.manual_seed(22)
     np.random.seed(22)
 
-    viz = visdom.Visdom()
+    viz = visdom.Visdom(env='IntroVAE')
 
-    db = load_celeba(args.root, args.imgsz)
+    transform = transforms.Compose([
+        transforms.Resize([args.imgsz, args.imgsz]),
+        transforms.ToTensor()])
+    db = datasets.ImageFolder(args.root, transform=transform)
     db_loader = DataLoader(db, batch_size=args.batchsz, shuffle=True, \
             num_workers=4, pin_memory=True)
 
