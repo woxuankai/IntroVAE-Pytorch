@@ -9,6 +9,7 @@ from   model import IntroVAE
 import visdom
 import tqdm
 import time
+import PIL
 
 def main(args):
     print(args)
@@ -19,10 +20,21 @@ def main(args):
     viz = visdom.Visdom(env='IntroVAE')
     update = 'append' if args.retain_plot else None
 
+    def load_func(path):
+        img = Image.open(x)
+        assert len(img.shape) == 2 or len(img.shape) == 3
+        if len(img.shpae) == 2:
+            img = np.expand_dims(img, -1)
+        assert img.shape[-1] == 1 or img.shape[-1] == 3
+        if img.shape[2] == 1:
+            img = img.repeat(3, -1)
+        return img
+
     transform = transforms.Compose([
         transforms.Resize([args.imgsz, args.imgsz]),
         transforms.ToTensor()])
-    db = datasets.ImageFolder(args.root, transform=transform)
+    db = datasets.ImageFolder(args.root, transform=transform, \
+            loader=lambda x: PIL.Image.open(x))
     db_loader = DataLoader(db, batch_size=args.batchsz, shuffle=True, \
             num_workers=4, pin_memory=True)
 
@@ -77,6 +89,8 @@ def main(args):
 
             iter_cnt += 1
             x = x.to(device, non_blocking=True)
+            if x.shape[1] == 1:
+                x = x.expand(-1,3,-1,-1)
             xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam = vae(x)
 
             time_start = time.time()
