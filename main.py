@@ -17,6 +17,7 @@ def main(args):
     np.random.seed(22)
 
     viz = visdom.Visdom(env='IntroVAE')
+    update = 'append' if args.retain_plot else None
 
     transform = transforms.Compose([
         transforms.Resize([args.imgsz, args.imgsz]),
@@ -55,14 +56,12 @@ def main(args):
                 print('load ckpt from:', args.resume, iter_cnt)
             else:
                 raise FileNotFoundError
-        update = 'append'
     else:
         print('training from scratch...')
-        update = None
 
     # training.
     print('>>training Intro-VAE now...')
-    vae.set_alph_beta_gamma(args.alpha, args.beta, args.gamma)
+    vae.set_alpha_beta(args.alpha, args.beta)
     last_loss, last_ckpt, last_disp = 0, 0, 0
     time_data, time_vis = 0, 0
     time_start = time.time()
@@ -78,21 +77,19 @@ def main(args):
 
             iter_cnt += 1
             x = x.to(device, non_blocking=True)
-            encoder_loss, decoder_loss, reg_ae, \
-                    encoder_adv, decoder_adv, loss_ae, xr, xp, \
-                    regr, regr_ng, regpp, regpp_ng = vae(x)
+            xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam = vae(x)
 
             time_start = time.time()
-            if iter_cnt % 10 == 0:
+            if iter_cnt % 50 == 0:
                 last_loss = iter_cnt
                 # display loss
-                viz.line([[args.beta*loss_ae.item(), args.gamma*reg_ae.item(),\
-                        args.alpha*regr_ng.item(), args.alpha*regpp_ng.item(),\
-                        args.alpha*regr.item(), args.alpha*regpp.item()]], \
-                        [iter_cnt], win='train', update=update,
-                        opts=dict(title='training', \
-                        legend=['b*ae', 'g*inf(x)', 'a*inf(xr)', 'a*inf(xp)', \
-                        'a*gen(xr)', 'a*gen(xp)']))
+                viz.line( \
+                        [[args.beta*AE, E_real, E_rec, E_sam, G_rec, G_sam]], \
+                        [iter_cnt], win='train', update=update, \
+                        opts= None if update else dict(title='training', \
+                        legend=['betaAE', 'E_real', 'E_rec', 'E_sam', \
+                        'G_rec', 'G_sam']))
+                '''
                 viz.line([encoder_loss.item()], [iter_cnt], \
                         win='encoder_loss', update=update,
                         opts=dict(title='encoder_loss'))
@@ -111,21 +108,22 @@ def main(args):
                 viz.line([decoder_adv.item()], [iter_cnt], \
                         win='decoder_adv', update=update,
                         opts=dict(title='decoder_adv'))
+                '''
                 update = 'append'
-            if iter_cnt % 50 == 0:
+            if iter_cnt % 250 == 0:
                 last_disp = iter_cnt
                 x, xr, xp = x[:8], xr[:8], xp[:8]
                 # display images
                 viz.histogram(xr[0].view(-1), win='xr_hist', \
                         opts=dict(title='xr_hist'))
-                unnorm_(x, xr, xp)
+                x, xr, xp = [img.clamp(0, 1) for img in (x, xr, xp)]
                 viz.images(x, nrow=4, win='x', opts=dict(title='x'))
                 viz.images(xr, nrow=4, win='xr', opts=dict(title='xr'))
                 viz.images(xp, nrow=4, win='xp', opts=dict(title='xp'))
                 # save images
                 save_image(xr, 'res/xr_%d.jpg' % iter_cnt, nrow=4)
                 save_image(xp, 'res/xp_%d.jpg' % iter_cnt, nrow=4)
-            if iter_cnt % 1000 == 0:
+            if iter_cnt % 3000 == 0:
                 last_ckpt = iter_cnt
                 # save checkpoint
                 torch.save(vae.state_dict(), 'ckpt/introvae_%d.mdl'%iter_cnt)
@@ -166,14 +164,14 @@ if __name__ == '__main__':
             help='alpha * loss_adv')
     argparser.add_argument('--beta', type=float, default=0.5, \
             help='beta * ae_loss')
-    argparser.add_argument('--gamma', type=float, default=1., \
-            help='gamma * kl(q||p)_loss')
     argparser.add_argument('--lr', type=float, default=0.0002, \
             help='learning rate')
     argparser.add_argument('--root', type=str, default='data', \
             help='root/label/*.jpg')
     argparser.add_argument('--resume', type=str, default=None, \
             help='with ckpt path, set empty str to load latest ckpt')
+    argparser.add_argument('--retain_plot', action='store_true', \
+            help='set this flag to ratain existing plots in visdom')
 
     args = argparser.parse_args()
     main(args)

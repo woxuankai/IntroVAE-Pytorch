@@ -1,7 +1,6 @@
 import  torch
 from    torch import nn, optim
 from    torch.nn import functional as F
-import  math
 
 class ResBlk(nn.Module):
     def __init__(self, kernels, chs):
@@ -66,7 +65,6 @@ class Encoder(nn.Module):
         self.layers.append(nn.Sequential( \
                 ResBlk([3, 3], [ch_next, ch_next, ch_next])))
 
-        # convert h_dim to 2*z_dim
         self.z_net = nn.Linear(ch_next*mapsz*mapsz, 2*z_dim)
 
         # just for print
@@ -164,7 +162,7 @@ class Decoder(nn.Module):
         :param x:
         :return:
         """
-        x = torch.randn(2, z_dim)
+        x = self.z_net(x)
         x = x.view(x.shape[0], -1, 4, 4)
         for layer in self.layers:
             x = layer(x)
@@ -173,58 +171,31 @@ class Decoder(nn.Module):
 
 class IntroVAE(nn.Module):
     def __init__(self, args):
-        """
-        :param imgsz:
-        :param z_dim: h_dim is the output dim of encoder, and we use z_net net to convert it from
-        h_dim to 2*z_dim and then splitting.
-        """
         super(IntroVAE, self).__init__()
-
         imgsz = args.imgsz
         z_dim = args.z_dim
 
         # set first conv channel as 16
-        self.encoder = Encoder(imgsz, 16)
-
-        # get h_dim of encoder output
-        x = torch.randn(2, 3, imgsz, imgsz)
-        z_ = self.encoder(x)
-        h_dim = z_.size(1)
-
-
-        # sample
-        z, mu, log_sigma2 = self.reparameterization(z_)
-
-        # create decoder by z_dim
-        self.decoder = Decoder(imgsz, z_dim)
-        out = self.decoder(z)
-
-        # print
-        print('IntroVAE x:', list(x.shape), 'z_:', list(z_.shape), 'z:', list(z.shape), 'out:', list(out.shape))
-
+        self.encoder = Encoder(imgsz, 16, z_dim)
+        self.decoder = Decoder(imgsz, 16, z_dim)
 
         self.alpha = args.alpha # for adversarial loss
         self.beta = args.beta # for reconstruction loss
-        self.gamma = args.gamma # for variational loss
         self.margin = args.margin # margin in eq. 11
         self.z_dim = z_dim # z is the hidden vector while h is the output of encoder
-        self.h_dim = h_dim
-
         self.optim_encoder = optim.Adam(self.encoder.parameters(), lr=args.lr)
         self.optim_decoder = optim.Adam(self.decoder.parameters(), lr=args.lr)
 
 
-    def set_alph_beta_gamma(self, alpha, beta, gamma):
+    def set_alpha_beta(self, alpha, beta):
         """
         this func is for pre-training, to set alpha=0 to transfer to vilina vae.
         :param alpha: for adversarial loss
         :param beta: for reconstruction loss
-        :param gamma: for variational loss
         :return:
         """
         self.alpha = alpha
         self.beta = beta
-        self.gamma = gamma
 
     def reparam(self, mu, logvar):
         # sample from normal dist
@@ -236,22 +207,11 @@ class IntroVAE(nn.Module):
 
     def kld(self, mu, logvar):
         """
-        compute the kl divergence between N(mu, sigma^2) and N(0, 1)
-        :param mu: [b, z_dim]
-        :param log_sigma2: [b, z_dim]
+        compute the kl divergence between N(mu, std) and N(0, 1)
         :return:
         """
-        batchsz = mu.size(0)
-        kl = - 0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum()
-
+        kl = - 0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum()/mu.shape[0]
         return kl
-
-    #def output_activation(self, x):
-    #    """
-    #    :param x:
-    #    :return:
-    #    """
-    #    return torch.tanh(x)
 
     def forward(self, x):
         """
@@ -260,48 +220,68 @@ class IntroVAE(nn.Module):
         :param x: [b, 3, 1024, 1024]
         :return:
         """
-        batchsz = x.size(0)
 
-        # algorithm 1 in arxiv paper
-        # 4. Z <- Enc(X)
+        # update inference model (encode)
+        for param in self.encoder.parameters():
+            param.requires_grad = True
+        for param in self.decoder.parameters():
+            param.requires_grad = False
+        # forward 1
         mu, logvar = self.encoder(x)
         z = self.reparam(mu, logvar)
-        # 5. Z_p <- N(0,1)
-        zp = torch.randn_like(z)
-        # 6. X_r <- Dec(Z), X_p <- Dec(Z_p)
         xr = self.decoder(z)
-        xp = self.decoder(zp)
-        # 7. L_AE <- L_AE(X_r, X)
-        ae = F.mse_loss(xr, x, reduction='sum')
-        # 8. Z_r <- Enc(ng(X_r)), Z_pp <- Enc(ng(X_p))
         mur, logvarr = self.encoder(xr.detach())
+        # forward 2
+        zp = torch.randn_like(z)
+        xp = self.decoder(zp)
         mupp, logvarpp = self.encoder(xp.detach())
-        # 9. L^E_adv <- L_REG(Z) + 
-        #  \alpha{[m - L_REG(Z_r)]^+ + [m - L_REG(Z_pp)]^+}
+        # backward
+        ae = (xr - x)**2
+        ae = 0.5*ae.view(ae.shape[0],-1).sum(dim=1).mean()
+        #ae = F.mse_loss(xr, x, reduction='sum')*0.5/x.shape[0]
         reg = self.kld(mu, logvar)
         regr = self.kld(mur, logvarr)
         regpp = self.kld(mupp, logvarpp)
+        # 9. L^E_adv <- L_REG(Z) + 
+        #  \alpha{[m - L_REG(Z_r)]^+ + [m - L_REG(Z_pp)]^+}
         Eadv = reg + \
-                self.alpha*F.relu(self.margin - regr) +
+                self.alpha*F.relu(self.margin - regr) + \
                 F.relu(self.margin - regpp)
         # 10. update \phi_E with L^E_adv + \betaL_AE
         self.optim_encoder.zero_grad()
         (Eadv + self.beta*ae).backward()
         self.optim_encoder.step()
-        # 11. Z_r <- Enc(X_r), Z_pp <- Enc(X_p)
+        # store
+        AE = ae.item()
+        E_real, E_rec, E_sam = reg.item(), regr.item(), regpp.item()
+
+        # update generator (decoder)
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        for param in self.decoder.parameters():
+            param.requires_grad = True
+        # forward 1
+        xr = self.decoder(z.detach())
         mur, logvarr = self.encoder(xr)
-        mupp, logvarpp = self.encoder(xp)
-        # 12. L^G_adv <- \aplha{L_REG(Z_r)+L_REG(Z_pp)}
+        # forward 2
+        xp = self.decoder(zp)
+        mupp, logvarpp = self.encoder(xp.detach())
+        # backward
+        #ae = F.mse_loss(xr, x, reduction='sum')/2
+        ae = (xr - x)**2
+        ae = 0.5*ae.view(ae.shape[0],-1).sum(dim=1).mean()
         regr = self.kld(mur, logvarr)
         regpp = self.kld(mupp, logvarpp)
+        # 12. L^G_adv <- \aplha{L_REG(Z_r)+L_REG(Z_pp)}
         Gadv = self.alpha*regr + regpp
         # 13 update \theta_G with L^G_adv + \betaL_AE
         self.optim_decoder.zero_grad()
         (Gadv + self.beta*ae).backward()
         self.optim_decoder.step()
+        # store
+        G_rec, G_sam = regr.item(), regpp.item()
 
-        return encoder_loss, decoder_loss, reg_ae, encoder_adv, decoder_adv, loss_ae, xr, xp, \
-               regr, regr_ng, regpp, regpp_ng
+        return xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam
 
 
 if __name__ == '__main__':
