@@ -281,7 +281,8 @@ class IntroVAE(nn.Module):
         # store
         G_rec, G_sam = regr.item(), regpp.item()
 
-        return xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam
+        return xr.detach(), xp.detach(), \
+                AE, E_real, E_rec, E_sam, G_rec, G_sam
 
 
 if __name__ == '__main__':
