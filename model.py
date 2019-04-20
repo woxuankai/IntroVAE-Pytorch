@@ -81,8 +81,8 @@ class Encoder(nn.Module):
             print(list(x.shape), end='=>')
             x = x.chunk(2, dim=1)
             print(list(x[0].shape), list(x[1].shape))
-        print(self.layers)
-        print(self.z_net)
+        #print(self.layers)
+        #print(self.z_net)
 
     def forward(self, x):
         """
@@ -154,8 +154,8 @@ class Decoder(nn.Module):
                 print(list(x.shape), end='=>')
                 x = layer(x)
             print(list(x.shape))
-        print(self.z_net)
-        print(self.layers)
+        #print(self.z_net)
+        #print(self.layers)
 
     def forward(self, x):
         """

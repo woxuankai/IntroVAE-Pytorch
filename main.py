@@ -17,7 +17,7 @@ def main(args):
     torch.manual_seed(22)
     np.random.seed(22)
 
-    viz = visdom.Visdom(env='IntroVAE')
+    viz = visdom.Visdom(env=args.name)
     update = 'append' if args.retain_plot else None
 
     def load_func(path):
@@ -44,7 +44,7 @@ def main(args):
     num = sum(map(lambda x: np.prod(x.shape), params))
     print('Total trainable tensors:', num)
 
-    for path in ['res', 'ckpt']:
+    for path in [args.name, args.name+'/res', args.name+'/ckpt']:
         if not os.path.exists(path):
             os.mkdir(path)
             print('mkdir:', path)
@@ -52,7 +52,7 @@ def main(args):
     iter_cnt = 0
     if args.resume is not None and args.resume != 'None':
         if args.resume is '': # load latest
-            ckpts = glob.glob('ckpt/*_*.mdl')
+            ckpts = glob.glob(args.name+'/ckpt/*_*.mdl')
             if not ckpts:
                 print('no avaliable ckpt found.')
                 raise FileNotFoundError
@@ -135,12 +135,14 @@ def main(args):
                 viz.images(xr, nrow=4, win='xr', opts=dict(title='xr'))
                 viz.images(xp, nrow=4, win='xp', opts=dict(title='xp'))
                 # save images
-                save_image(xr, 'res/xr_%d.jpg' % iter_cnt, nrow=4)
-                save_image(xp, 'res/xp_%d.jpg' % iter_cnt, nrow=4)
+                save_image(x, args.name+'/res/x_%d.jpg' % iter_cnt, nrow=4)
+                save_image(xr, args.name+'/res/xr_%d.jpg' % iter_cnt, nrow=4)
+                save_image(xp, args.name+'/res/xp_%d.jpg' % iter_cnt, nrow=4)
             if iter_cnt % 3000 == 0:
                 last_ckpt = iter_cnt
                 # save checkpoint
-                torch.save(vae.state_dict(), 'ckpt/introvae_%d.mdl'%iter_cnt)
+                torch.save(vae.state_dict(), \
+                        args.name+'/ckpt/introvae_%d.mdl'%iter_cnt)
 
             time_vis = time.time() - time_start
             time_start = time.time()
@@ -160,8 +162,8 @@ def main(args):
                 postfix += ' vis %.1f'%time_vis
             tqdm_iter.set_postfix_str(postfix)
 
-    torch.save(vae.state_dict(), 'ckpt/introvae_%d.mdl'%iter_cnt)
-    print('saved final ckpt:', 'ckpt/introvae_%d.mdl'%iter_cnt)
+    torch.save(vae.state_dict(), args.name+'/ckpt/introvae_%d.mdl'%iter_cnt)
+    print('saved final ckpt:', args.name+'/ckpt/introvae_%d.mdl'%iter_cnt)
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
@@ -186,6 +188,8 @@ if __name__ == '__main__':
             help='with ckpt path, set empty str to load latest ckpt')
     argparser.add_argument('--retain_plot', action='store_true', \
             help='set this flag to ratain existing plots in visdom')
+    argparser.add_argument('--name', type=str, default='IntroVAE', \
+            help='name for storage and checkpoint')
 
     args = argparser.parse_args()
     main(args)
