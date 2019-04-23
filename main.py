@@ -1,7 +1,8 @@
 import os, glob
+import os.path
 import torch
 import numpy as np
-from   torch.utils.data import DataLoader
+from   torch.utils.data import Dataset, DataLoader
 import argparse
 from   torchvision.utils import save_image
 from   torchvision import datasets, transforms
@@ -10,6 +11,43 @@ import visdom
 import tqdm
 import time
 import PIL
+
+def load_func(path):
+    img = Image.open(x)
+    assert len(img.shape) == 2 or len(img.shape) == 3
+    if len(img.shpae) == 2:
+        img = np.expand_dims(img, -1)
+    assert img.shape[-1] == 1 or img.shape[-1] == 3
+    if img.shape[2] == 1:
+        img = img.repeat(3, -1)
+    return img
+
+def has_file_allowed_extension(filename, extensions):
+    return filename.lower().endswith(extensions)
+
+class DB(Dataset):
+    def __init__(self, root, transform=None):
+        extensions = ('.jpg', '.jpeg', '.png', '.ppm', \
+                '.bmp', '.pgm', '.tif', '.tiff', '.webp')
+        images = []
+        for root, _, fnames in sorted(os.walk(root)):
+            for fname in sorted(fnames):
+                if has_file_allowed_extension(fname, extensions):
+                    path = os.path.join(root, fname)
+                    images.append(path)
+        self.images = images
+        self.transform = transform
+
+    def __getitem__(self, index):
+        path = self.images[index]
+        sample = PIL.Image.open(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+        return sample
+
+    def __len__(self):
+        return len(self.images)
+
 
 def main(args):
     print(args)
@@ -20,21 +58,13 @@ def main(args):
     viz = visdom.Visdom(env=args.name)
     update = 'append' if args.retain_plot else None
 
-    def load_func(path):
-        img = Image.open(x)
-        assert len(img.shape) == 2 or len(img.shape) == 3
-        if len(img.shpae) == 2:
-            img = np.expand_dims(img, -1)
-        assert img.shape[-1] == 1 or img.shape[-1] == 3
-        if img.shape[2] == 1:
-            img = img.repeat(3, -1)
-        return img
 
     transform = transforms.Compose([
         transforms.Resize([args.imgsz, args.imgsz]),
         transforms.ToTensor()])
-    db = datasets.ImageFolder(args.root, transform=transform, \
-            loader=lambda x: PIL.Image.open(x))
+
+    db = DB(args.root, transform=transform)
+
     db_loader = DataLoader(db, batch_size=args.batchsz, shuffle=True, \
             num_workers=4, pin_memory=True)
 
@@ -84,7 +114,7 @@ def main(args):
         tqdm_iter = tqdm.tqdm(db_loader, desc='iter', \
                 bar_format=str(args.batchsz)+': {n_fmt}/{total_fmt}'+\
                 '[{elapsed}<{remaining},{rate_fmt}]'+'{postfix}')
-        for x, label in tqdm_iter:
+        for x in tqdm_iter:
             time_data = time.time() - time_start
 
             iter_cnt += 1

@@ -244,9 +244,9 @@ class IntroVAE(nn.Module):
         regpp = self.kld(mupp, logvarpp)
         # 9. L^E_adv <- L_REG(Z) + 
         #  \alpha{[m - L_REG(Z_r)]^+ + [m - L_REG(Z_pp)]^+}
-        Eadv = reg + \
-                self.alpha*F.relu(self.margin - regr) + \
-                F.relu(self.margin - regpp)
+        Eadv = reg + self.alpha*( \
+                F.relu(self.margin - regr) + \
+                F.relu(self.margin - regpp))
         # 10. update \phi_E with L^E_adv + \betaL_AE
         self.optim_encoder.zero_grad()
         (Eadv + self.beta*ae).backward()
@@ -273,7 +273,7 @@ class IntroVAE(nn.Module):
         regr = self.kld(mur, logvarr)
         regpp = self.kld(mupp, logvarpp)
         # 12. L^G_adv <- \aplha{L_REG(Z_r)+L_REG(Z_pp)}
-        Gadv = self.alpha*regr + regpp
+        Gadv = self.alpha*(regr + regpp)
         # 13 update \theta_G with L^G_adv + \betaL_AE
         self.optim_decoder.zero_grad()
         (Gadv + self.beta*ae).backward()
