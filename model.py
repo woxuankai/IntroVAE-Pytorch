@@ -28,7 +28,7 @@ class ResBlk(nn.Module):
         return self.outAct(self.shortcut(x) + self.net(x))
 
 class Encoder(nn.Module):
-    def __init__(self, imgsz, ch, z_dim):
+    def __init__(self, imgsz, ch, z_dim, io_ch=3):
         """
         :param imgsz:
         :param ch: base channels
@@ -38,7 +38,7 @@ class Encoder(nn.Module):
         self.layers = nn.ModuleList()
 
         self.layers.append(nn.Sequential( \
-                nn.Conv2d(3, ch, kernel_size=5, stride=1, padding=2),
+                nn.Conv2d(io_ch, ch, kernel_size=5, stride=1, padding=2),
                 nn.LeakyReLU(0.2, True), 
                 nn.AvgPool2d(2, stride=None, padding=0)))
 
@@ -68,7 +68,7 @@ class Encoder(nn.Module):
         self.z_net = nn.Linear(ch_next*mapsz*mapsz, 2*z_dim)
 
         # just for print
-        x = torch.randn(2, 3, imgsz, imgsz)
+        x = torch.randn(2, io_ch, imgsz, imgsz)
         print('Encoder:', list(x.shape), end='=>')
         with torch.no_grad():
             for layer in self.layers[:-1]:
@@ -96,7 +96,7 @@ class Encoder(nn.Module):
         return mu, logvar
 
 class Decoder(nn.Module):
-    def __init__(self, imgsz, ch, z_dim):
+    def __init__(self, imgsz, ch, z_dim, io_ch=3):
         """
         :param imgsz:
         :param ch: base channels
@@ -106,11 +106,10 @@ class Decoder(nn.Module):
         self.layers = nn.ModuleList()
 
         self.layers.insert(0, nn.Sequential( \
-                nn.Conv2d(ch, 3, kernel_size=5, stride=1, padding=2),
-                nn.LeakyReLU(0.2, True)))
+                nn.Conv2d(ch, io_ch, kernel_size=5, stride=1, padding=2)))
 
         self.layers.insert(0, nn.Sequential( \
-                nn.Upsample(scale_factor=2, mode='nearest'),
+                nn.Upsample(scale_factor=2),
                 ResBlk([3, 3], [ch, ch, ch])))
 
         mapsz = imgsz // 2
@@ -118,7 +117,7 @@ class Decoder(nn.Module):
         ch_next = ch_cur * 2
         while mapsz > 16: # util [b, ch_, 16, 16]
             self.layers.insert(0, nn.Sequential( \
-                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    nn.Upsample(scale_factor=2),
                     ResBlk([1, 3, 3], [ch_next]+[ch_cur]*3)))
             mapsz = mapsz // 2
             ch_cur = ch_next
@@ -127,7 +126,7 @@ class Decoder(nn.Module):
         # 16*16, 8*8
         for _ in range(2):
             self.layers.insert(0, nn.Sequential( \
-                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    nn.Upsample(scale_factor=2),
                     ResBlk([3, 3], [ch_next]+[ch_cur]*2)))
             mapsz = mapsz // 2
             ch_cur = ch_next
@@ -176,8 +175,9 @@ class IntroVAE(nn.Module):
         z_dim = args.z_dim
 
         # set first conv channel as 16
-        self.encoder = Encoder(imgsz, 16, z_dim)
-        self.decoder = Decoder(imgsz, 16, z_dim)
+        io_ch = 3 if args.num_classes < 0 else args.num_classes
+        self.encoder = Encoder(imgsz, 16, z_dim, io_ch)
+        self.decoder = Decoder(imgsz, 16, z_dim, io_ch)
 
         self.alpha = args.alpha # for adversarial loss
         self.beta = args.beta # for reconstruction loss

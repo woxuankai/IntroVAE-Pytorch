@@ -5,45 +5,68 @@ import numpy as np
 from   torch.utils.data import Dataset, DataLoader
 import argparse
 from   torchvision.utils import save_image
-from   torchvision import datasets, transforms
 from   model import IntroVAE
 import visdom
 import tqdm
 import time
-import PIL
+import skimage
 
-def load_func(path):
-    img = Image.open(x)
-    assert len(img.shape) == 2 or len(img.shape) == 3
-    if len(img.shpae) == 2:
-        img = np.expand_dims(img, -1)
-    assert img.shape[-1] == 1 or img.shape[-1] == 3
-    if img.shape[2] == 1:
-        img = img.repeat(3, -1)
-    return img
+colormap = torch.tensor([ \
+        [0  ,0  ,0  ], \
+        [0  ,0  ,255], \
+        [0  ,255,0  ], \
+        [255,0  ,0  ], \
+        [0  ,255,255], \
+        [255,255,0  ], \
+        [255,0  ,255]])/255.0
 
-def has_file_allowed_extension(filename, extensions):
-    return filename.lower().endswith(extensions)
 
 class DB(Dataset):
-    def __init__(self, root, transform=None):
+    def __init__(self, args):
         extensions = ('.jpg', '.jpeg', '.png', '.ppm', \
                 '.bmp', '.pgm', '.tif', '.tiff', '.webp')
         images = []
-        for root, _, fnames in sorted(os.walk(root)):
+        for root, _, fnames in sorted(os.walk(args.root)):
             for fname in sorted(fnames):
-                if has_file_allowed_extension(fname, extensions):
+                if fname.lower().endswith(extensions):
                     path = os.path.join(root, fname)
                     images.append(path)
         self.images = images
-        self.transform = transform
+        self.imgsz = args.imgsz
+        self.num_classes = args.num_classes
+
+    def getImage(self, index):
+        path = self.images[index]
+        sample = skimage.io.imread(path)
+        sample = skimage.transform.resize(sample, (self.imgsz, self.imgsz))
+        assert len(sample.shape) == 2 or len(sample.shape) == 3
+        if len(sample.shape) == 2:
+            sample = np.expand_dims(sample, -1)
+        assert sample.shape[-1] == 1 or sample.shape[-1] == 3
+        if sample.shape[2] == 1:
+            sample = sample.repeat(3, -1)
+        # change H,W,C to C,H,W
+        sample = sample.transpose((2, 0, 1))
+        if np.issubdtype(sample.dtype, np.integer):
+            sample = sample/255.
+        return torch.Tensor(sample)
+
+    def getLabel(self, index):
+        path = self.images[index]
+        sample = skimage.io.imread(path)
+        sample = skimage.transform.resize(sample.astype(np.float32), \
+                (self.imgsz, self.imgsz), order=0).astype(sample.dtype)
+        assert len(sample.shape) == 2
+        assert np.issubdtype(sample.dtype, np.integer)
+        sample = torch.LongTensor(sample)
+        sample = torch.nn.functional.one_hot(sample, self.num_classes)
+        return sample.permute(2,0,1).type(torch.Tensor)
 
     def __getitem__(self, index):
-        path = self.images[index]
-        sample = PIL.Image.open(path)
-        if self.transform is not None:
-            sample = self.transform(sample)
-        return sample
+        if self.num_classes < 0:
+            return self.getImage(index)
+        else:
+            return self.getLabel(index)
 
     def __len__(self):
         return len(self.images)
@@ -52,19 +75,13 @@ class DB(Dataset):
 def main(args):
     print(args)
 
-    torch.manual_seed(22)
-    np.random.seed(22)
+    #torch.manual_seed(22)
+    #np.random.seed(22)
 
     viz = visdom.Visdom(env=args.name)
     update = 'append' if args.retain_plot else None
 
-
-    transform = transforms.Compose([
-        transforms.Resize([args.imgsz, args.imgsz]),
-        transforms.ToTensor()])
-
-    db = DB(args.root, transform=transform)
-
+    db = DB(args)
     db_loader = DataLoader(db, batch_size=args.batchsz, shuffle=True, \
             num_workers=4, pin_memory=True)
 
@@ -108,9 +125,6 @@ def main(args):
     time_data, time_vis = 0, 0
     time_start = time.time()
     for _ in tqdm.trange(args.epoch, desc='epoch'):
-        #print('epoch '+str(epoch+1)+'/'+str(args.epoch))
-        #del epoch
-        #print('iter vae enc-adv dec-adv ae enc dec')
         tqdm_iter = tqdm.tqdm(db_loader, desc='iter', \
                 bar_format=str(args.batchsz)+': {n_fmt}/{total_fmt}'+\
                 '[{elapsed}<{remaining},{rate_fmt}]'+'{postfix}')
@@ -119,8 +133,6 @@ def main(args):
 
             iter_cnt += 1
             x = x.to(device, non_blocking=True)
-            if x.shape[1] == 1:
-                x = x.expand(-1,3,-1,-1)
             xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam = vae(x)
 
             time_start = time.time()
@@ -133,33 +145,18 @@ def main(args):
                         opts= None if update else dict(title='training', \
                         legend=['betaAE', 'E_real', 'E_rec', 'E_sam', \
                         'G_rec', 'G_sam']))
-                '''
-                viz.line([encoder_loss.item()], [iter_cnt], \
-                        win='encoder_loss', update=update,
-                        opts=dict(title='encoder_loss'))
-                viz.line([decoder_loss.item()], [iter_cnt], \
-                        win='decoder_loss', update=update,
-                        opts=dict(title='decoder_loss'))
-                viz.line([loss_ae.item()], [iter_cnt], \
-                        win='ae_loss', update=update,
-                        opts=dict(title='ae_loss'))
-                viz.line([reg_ae.item()], [iter_cnt], \
-                        win='reg_ae', update=update,
-                        opts=dict(title='reg_ae'))
-                viz.line([encoder_adv.item()], [iter_cnt], \
-                        win='encoder_adv', update=update,
-                        opts=dict(title='encoder_adv'))
-                viz.line([decoder_adv.item()], [iter_cnt], \
-                        win='decoder_adv', update=update,
-                        opts=dict(title='decoder_adv'))
-                '''
                 update = 'append'
             if iter_cnt % 250 == 0:
                 last_disp = iter_cnt
-                x, xr, xp = x[:8], xr[:8], xp[:8]
-                # display images
-                viz.histogram(xr[0].view(-1), win='xr_hist', \
-                        opts=dict(title='xr_hist'))
+                x, xr, xp = x[:8].cpu(), xr[:8].cpu(), xp[:8].cpu()
+                if args.num_classes < 0:
+                    # display images
+                    viz.histogram(xr[0].view(-1), win='xr_hist', \
+                            opts=dict(title='xr_hist'))
+                else:
+                    x=colormap[x.argmax(1)].permute(0,3,1,2)
+                    xr=colormap[xr.argmax(1)].permute(0,3,1,2)
+                    xp = colormap[xp.argmax(1)].permute(0,3,1,2)
                 x, xr, xp = [img.clamp(0, 1) for img in (x, xr, xp)]
                 viz.images(x, nrow=4, win='x', opts=dict(title='x'))
                 viz.images(xr, nrow=4, win='xr', opts=dict(title='xr'))
@@ -176,14 +173,6 @@ def main(args):
 
             time_vis = time.time() - time_start
             time_start = time.time()
-            #tqdm_iter.set_postfix_str( \
-            #        'data/vis %.1f/%.1f|cnt/loss/disp/ckpt %d%d%d%d'%( \
-            #        time_data, time_vis, \
-            #        iter_cnt, last_loss, last_disp, last_ckpt))
-            # tqdm_iter.set_postfix_str( \
-            #        'data/vis %.1f/%.1f, cnts %d/%d/%d/%d'%( \
-            #        time_data, time_vis, \
-            #        iter_cnt, last_loss, last_disp, last_ckpt))
             postfix = '[%d/%d/%d/%d]'%( \
                     iter_cnt, last_loss, last_disp, last_ckpt)
             if time_data >= 0.1:
@@ -220,6 +209,8 @@ if __name__ == '__main__':
             help='set this flag to ratain existing plots in visdom')
     argparser.add_argument('--name', type=str, default='IntroVAE', \
             help='name for storage and checkpoint')
+    argparser.add_argument('--num_classes', type=int, default=-1, \
+            help='set to positive value to model shapes (e.g. segmentation)')
 
     args = argparser.parse_args()
     main(args)
