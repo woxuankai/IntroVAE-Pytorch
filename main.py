@@ -38,7 +38,8 @@ class DB(Dataset):
     def getImage(self, index):
         path = self.images[index]
         sample = skimage.io.imread(path)
-        sample = skimage.transform.resize(sample, (self.imgsz, self.imgsz))
+        sample = skimage.transform.resize(sample, (self.imgsz, self.imgsz), \
+                mode='reflect', anti_aliasing=True)
         assert len(sample.shape) == 2 or len(sample.shape) == 3
         if len(sample.shape) == 2:
             sample = np.expand_dims(sample, -1)
@@ -55,7 +56,8 @@ class DB(Dataset):
         path = self.images[index]
         sample = skimage.io.imread(path)
         sample = skimage.transform.resize(sample.astype(np.float32), \
-                (self.imgsz, self.imgsz), order=0).astype(sample.dtype)
+                (self.imgsz, self.imgsz), order=0, \
+                mode='reflect', anti_aliasing=False).astype(sample.dtype)
         assert len(sample.shape) == 2
         assert np.issubdtype(sample.dtype, np.integer)
         sample = torch.LongTensor(sample)
@@ -148,23 +150,24 @@ def main(args):
                 update = 'append'
             if iter_cnt % 250 == 0:
                 last_disp = iter_cnt
-                x, xr, xp = x[:8].cpu(), xr[:8].cpu(), xp[:8].cpu()
+                x, xr, xp = [img[:8].cpu() for img in (x, xr, xp)]
                 if args.num_classes < 0:
                     # display images
                     viz.histogram(xr[0].view(-1), win='xr_hist', \
                             opts=dict(title='xr_hist'))
                 else:
-                    x=colormap[x.argmax(1)].permute(0,3,1,2)
-                    xr=colormap[xr.argmax(1)].permute(0,3,1,2)
-                    xp = colormap[xp.argmax(1)].permute(0,3,1,2)
+                    x, xr, xp = [colormap[img.argmax(1)].permute(0,3,1,2) \
+                            for img in (x, xr, xp)]
                 x, xr, xp = [img.clamp(0, 1) for img in (x, xr, xp)]
                 viz.images(x, nrow=4, win='x', opts=dict(title='x'))
                 viz.images(xr, nrow=4, win='xr', opts=dict(title='xr'))
                 viz.images(xp, nrow=4, win='xp', opts=dict(title='xp'))
                 # save images
-                save_image(x, args.name+'/res/x_%d.jpg' % iter_cnt, nrow=4)
-                save_image(xr, args.name+'/res/xr_%d.jpg' % iter_cnt, nrow=4)
-                save_image(xp, args.name+'/res/xp_%d.jpg' % iter_cnt, nrow=4)
+                save_image(torch.cat([x,xr,xp], 0), \
+                        args.name+'/res/x_xr_xp_%010d.png' % iter_cnt, nrow=4)
+                #save_image(x, args.name+'/res/x_%d.jpg' % iter_cnt, nrow=4)
+                #save_image(xr, args.name+'/res/xr_%d.jpg' % iter_cnt, nrow=4)
+                #save_image(xp, args.name+'/res/xp_%d.jpg' % iter_cnt, nrow=4)
             if iter_cnt % 3000 == 0:
                 last_ckpt = iter_cnt
                 # save checkpoint
