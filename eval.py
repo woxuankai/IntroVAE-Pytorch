@@ -16,6 +16,7 @@ def main(args):
     print('load ckpt from:', args.load)
 
     args.root = '/dev/null'
+    args.data_aug = False
     db = DB(args)
     db.images = args.input
     imgs = [img for img in db]
@@ -23,7 +24,7 @@ def main(args):
     mu, logvar = vae.encoder(x)
 
     z = torch.nn.functional.interpolate(mu.permute(1,0).unsqueeze(0), \
-            size=args.n_interp, mode='linear', align_corners=False \
+            size=args.n_interp, mode='linear', align_corners=True \
             ).squeeze(0).permute(1,0)
     xr = vae.decoder(z)
     if args.num_classes >= 0:

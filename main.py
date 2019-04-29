@@ -8,8 +8,8 @@ from   torchvision.utils import save_image
 from   model import IntroVAE
 import visdom
 import tqdm
-import time
 import skimage
+import time, random, math
 
 colormap = torch.tensor([ \
         [0  ,0  ,0  ], \
@@ -34,12 +34,29 @@ class DB(Dataset):
         self.images = images
         self.imgsz = args.imgsz
         self.num_classes = args.num_classes
+        self.data_aug = args.data_aug
+
+    def updateTransform(self):
+        rotate = math.pi/15.0
+        trans = self.imgsz/20.0
+        t1 = skimage.transform.EuclideanTransform( \
+                translation=(self.imgsz/2.0+0.5))
+        r = skimage.transform.EuclideanTransform( \
+                rotation=(random.random()-0.5)*2*rotate)
+        t2 = skimage.transform.EuclideanTransform( \
+                translation=-(self.imgsz/2.0+0.5))
+        t = skimage.transform.EuclideanTransform( \
+                translation=(random.random()-0.5)*2*trans)
+        self.transform = t + t2 + r + t1
 
     def getImage(self, index):
         path = self.images[index]
         sample = skimage.io.imread(path)
         sample = skimage.transform.resize(sample, (self.imgsz, self.imgsz), \
                 mode='reflect', anti_aliasing=True)
+        if self.data_aug:
+            sample = skimage.transform.warp(sample, self.transform, \
+                    mode='reflect')
         assert len(sample.shape) == 2 or len(sample.shape) == 3
         if len(sample.shape) == 2:
             sample = np.expand_dims(sample, -1)
@@ -55,9 +72,14 @@ class DB(Dataset):
     def getLabel(self, index):
         path = self.images[index]
         sample = skimage.io.imread(path)
-        sample = skimage.transform.resize(sample.astype(np.float32), \
+        warped = sample.astype(np.float32)
+        warped = skimage.transform.resize(warped, \
                 (self.imgsz, self.imgsz), order=0, \
-                mode='reflect', anti_aliasing=False).astype(sample.dtype)
+                mode='reflect', anti_aliasing=False)
+        if self.data_aug:
+            warped = skimage.transform.warp(warped, self.transform, \
+                    order=0, mode='reflect')
+        sample = warped.astype(sample.dtype)
         assert len(sample.shape) == 2
         assert np.issubdtype(sample.dtype, np.integer)
         sample = torch.LongTensor(sample)
@@ -65,6 +87,7 @@ class DB(Dataset):
         return sample.permute(2,0,1).type(torch.Tensor)
 
     def __getitem__(self, index):
+        self.updateTransform()
         if self.num_classes < 0:
             return self.getImage(index)
         else:
@@ -214,6 +237,8 @@ if __name__ == '__main__':
             help='name for storage and checkpoint')
     argparser.add_argument('--num_classes', type=int, default=-1, \
             help='set to positive value to model shapes (e.g. segmentation)')
+    argparser.add_argument('--data_aug', action='store_true', \
+            help='do data augmentation by rotation and translation')
 
     args = argparser.parse_args()
     main(args)

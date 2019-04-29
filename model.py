@@ -276,10 +276,7 @@ class IntroVAE(nn.Module):
         regr = self.kld(mur, logvarr)
         regpp = self.kld(mupp, logvarpp)
         # 12. L^G_adv <- \aplha{L_REG(Z_r)+L_REG(Z_pp)}
-        if self.alpha != 0:
-            Gadv = self.alpha*(regr + regpp)
-        else:
-            Gadv = 0
+        Gadv = 0 if self.alpha == 0 else self.alpha*(regr + regpp)
         # 13 update \theta_G with L^G_adv + \betaL_AE
         self.optim_decoder.zero_grad()
         (Gadv + self.beta*ae).backward()
