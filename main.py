@@ -195,7 +195,7 @@ def main(args):
                 last_ckpt = iter_cnt
                 # save checkpoint
                 torch.save(vae.state_dict(), \
-                        args.name+'/ckpt/introvae_%d.mdl'%iter_cnt)
+                        args.name+'/ckpt/vae_%010d.mdl'%iter_cnt)
 
             time_vis = time.time() - time_start
             time_start = time.time()
@@ -207,8 +207,8 @@ def main(args):
                 postfix += ' vis %.1f'%time_vis
             tqdm_iter.set_postfix_str(postfix)
 
-    torch.save(vae.state_dict(), args.name+'/ckpt/introvae_%d.mdl'%iter_cnt)
-    print('saved final ckpt:', args.name+'/ckpt/introvae_%d.mdl'%iter_cnt)
+    torch.save(vae.state_dict(), args.name+'/ckpt/vae_%010d.mdl'%iter_cnt)
+    print('saved final ckpt:', args.name+'/ckpt/vae_%010d.mdl'%iter_cnt)
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
