@@ -27,17 +27,20 @@ not improving any more.
 
 3. Interpolating in latent space.
 ```bash
-python3 eval.py --load FFHQ/ckpt/introvae_xxxx.mdl --input /path/to/image1.png /path/to/image2.png --output rect.png --n_interp 5
+python3 eval.py --load FFHQt/ckpt/vae_0000060000.mdl --input /path/to/FFHQ/thumbnails128x128/12345.png /path/to/FFHQ/thumbnails128x128/23456.png --output interp.png --n_interp 5
 ```
 
 # Results
 Tested for FFHQ 128x128 thumbnails.
 
 - Training curve.
+
 ![](assets/training.png)
 
 - Original, reconstructed and sampled images.
+
 ![](assets/x_xr_xp_0000060000.png)
 
 - Interpolation in latent space.
+
 ![](assets/interp.png)
