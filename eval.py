@@ -2,6 +2,7 @@ import torch
 from torchvision.utils import make_grid, save_image
 import numpy as np
 import argparse
+import skimage
 from model import IntroVAE
 from main import DB, colormap
 
@@ -27,16 +28,27 @@ def main(args):
             size=args.n_interp, mode='linear', align_corners=True \
             ).squeeze(0).permute(1,0)
     xr = vae.decoder(z)
-    if args.num_classes >= 0:
-        x, xr = [colormap[img.argmax(1)].permute(0,3,1,2) \
-                for img in (x, xr)]
-    max_len = max(x.shape[0], xr.shape[0])
-    output = torch.cat( \
-            [x[:]] + [torch.zeros_like(x[0:1])]*(max_len - x.shape[0]) + \
-            [xr[:]] + [torch.zeros_like(xr[0:1])]*(max_len - xr.shape[0]), \
-            dim=0)
-    save_image(output, args.output, nrow=max_len, range=(0,1))
-    print('write output to :', args.output)
+    xr, x = xr.cpu(), x.cpu()
+    if len(args.output) == 1:
+        # save pretty-formated result
+        if args.num_classes >= 0:
+            x, xr = [colormap[img.argmax(1)].permute(0,3,1,2) \
+                    for img in (x, xr)]
+        max_len = max(x.shape[0], xr.shape[0])
+        output = torch.cat( \
+                [x[:]]+[torch.zeros_like(x[0:1])]*(max_len - x.shape[0]) + \
+                [xr[:]]+[torch.zeros_like(xr[0:1])]*(max_len - xr.shape[0]), \
+                dim=0)
+        save_image(output, args.output[0], nrow=max_len, range=(0,1))
+        print('write output to :', args.output[0])
+    else:
+        # save raw output
+        assert len(args.output) == args.n_interp
+        if args.num_classes >= 0:
+            xr = xr.argmax(1).to(torch.uint8)
+        for img, output in zip(xr, args.output):
+            skimage.io.imsave(output, img.numpy())
+        print('write outputs to :', args.output)
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
@@ -50,7 +62,7 @@ if __name__ == '__main__':
             help='checkpoint to load')
     argparser.add_argument('--input', type=str, required=True, nargs='*', \
             help='checkpoint to load')
-    argparser.add_argument('--output', type=str, required=True, \
+    argparser.add_argument('--output', type=str, required=True, nargs='*', \
             help='output path')
     argparser.add_argument('--num_classes', type=int, default=-1, \
             help='set to positive value to model shapes (e.g. segmentation)')
