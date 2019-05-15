@@ -1,5 +1,7 @@
 import os, glob
 import os.path
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
 import torch
 import numpy as np
 from   torch.utils.data import Dataset, DataLoader
@@ -108,7 +110,7 @@ def main(args):
 
     db = DB(args)
     db_loader = DataLoader(db, batch_size=args.batchsz, shuffle=True, \
-            num_workers=4, pin_memory=True)
+            num_workers=8, pin_memory=True)
 
     device = torch.device('cuda')
     vae = IntroVAE(args).to(device)
