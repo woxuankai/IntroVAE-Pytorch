@@ -39,7 +39,7 @@ class DB(Dataset):
         self.data_aug = args.data_aug
 
     def updateTransform(self):
-        rotate = math.pi/15.0
+        rotate = math.pi/40.0
         trans = self.imgsz/20.0
         t1 = skimage.transform.EuclideanTransform( \
                 translation=(self.imgsz/2.0+0.5))
@@ -110,7 +110,7 @@ def main(args):
 
     db = DB(args)
     db_loader = DataLoader(db, batch_size=args.batchsz, shuffle=True, \
-            num_workers=8, pin_memory=True)
+            num_workers=16, pin_memory=True)
 
     device = torch.device('cuda')
     vae = IntroVAE(args).to(device)
