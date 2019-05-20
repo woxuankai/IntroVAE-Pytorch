@@ -22,6 +22,10 @@ colormap = torch.tensor([ \
         [255,255,0  ], \
         [255,0  ,255]])/255.0
 
+def onehot(x, num_classes=0):
+    if num_classes == 0:
+        num_classes = x.max()+1
+    return np.eye(num_classes)[x.flatten()].reshape(*x.shape,-1)
 
 class DB(Dataset):
     def __init__(self, args):
@@ -74,19 +78,18 @@ class DB(Dataset):
     def getLabel(self, index):
         path = self.images[index]
         sample = skimage.io.imread(path)
-        warped = sample.astype(np.float32)
-        warped = skimage.transform.resize(warped, \
-                (self.imgsz, self.imgsz), order=0, \
-                mode='reflect', anti_aliasing=False)
-        if self.data_aug:
-            warped = skimage.transform.warp(warped, self.transform, \
-                    order=0, mode='reflect')
-        sample = warped.astype(sample.dtype)
         assert len(sample.shape) == 2
         assert np.issubdtype(sample.dtype, np.integer)
-        sample = torch.LongTensor(sample)
-        sample = torch.nn.functional.one_hot(sample, self.num_classes)
-        return sample.permute(2,0,1).type(torch.Tensor)
+        sample = onehot(sample, self.num_classes)
+        warped = sample.astype(np.float32)
+        warped = skimage.transform.resize(warped, (self.imgsz, self.imgsz), \
+                mode='reflect', anti_aliasing=True)
+        if self.data_aug:
+            warped = skimage.transform.warp(warped, self.transform, \
+                    mode='reflect')
+        sample = warped.astype(np.float32)
+        sample = sample.transpose((2, 0, 1))
+        return torch.Tensor(sample)
 
     def __getitem__(self, index):
         self.updateTransform()
@@ -161,6 +164,9 @@ def main(args):
             iter_cnt += 1
             x = x.to(device, non_blocking=True)
             xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam = vae(x)
+            for var in (xr, xp, AE, E_real, E_rec, E_sam, G_rec, G_sam):
+                if not isinstance(var, torch.Tensor): var = torch.tensor(var)
+                assert not torch.isnan(var).any(), 'nan detected!'
 
             time_start = time.time()
             if iter_cnt % 50 == 0:
